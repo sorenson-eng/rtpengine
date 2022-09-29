@@ -106,7 +106,9 @@ error:
 }
 
 
-int rtp_padding(struct rtp_header *header, str *payload) {
+int rtp_padding(const struct rtp_header *header, str *payload) {
+	if (!header || payload->s)
+		return 0;
 	if (!(header->v_p_x_cc & 0x20))
 		return 0; // no padding
 	if (payload->len == 0)
