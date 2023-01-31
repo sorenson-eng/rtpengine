@@ -77,6 +77,8 @@ struct sdp_media {
 	int rr, rs;
 	struct sdp_attributes attributes;
 	GQueue format_list; /* list of slice-alloc'd str objects */
+
+	unsigned int legacy_osrtp:1;
 };
 
 struct attribute_rtcp {
@@ -1496,6 +1498,63 @@ static void __sdp_t38(struct stream_params *sp, struct sdp_media *media) {
 }
 
 
+// Check the list for a legacy non-RFC OSRTP offer:
+// Given m= lines must be alternating between one RTP and one SRTP m= line, with matching
+// types between each pair.
+// If found, rewrite the list to pretend that only the SRTP m=line was given, and mark
+// the session media accordingly.
+// TODO: should be handled by monologue_offer_answer, without requiring OSRTP-accept to be
+// set for re-invites. SDP rewriting and skipping media sections should be handled by
+// associating offer/answer media sections directly with each other, instead of requiring
+// the indexing to be in order and instead of requiring all sections between monologue and sdp_media
+// lists to be matching.
+static void legacy_osrtp_accept(struct stream_params *sp, GQueue *streams, GList *prev_media_link,
+		struct sdp_ng_flags *flags, unsigned int *num)
+{
+	if (!streams->tail)
+		return;
+	if (!prev_media_link)
+		return;
+	struct stream_params *last = streams->tail->data;
+
+	if (!flags->osrtp_accept_legacy)
+		return;
+
+	// protocols must be known
+	if (!sp->protocol)
+		return;
+	if (!last->protocol)
+		return;
+	// types must match
+	if (str_cmp_str(&sp->type, &last->type) != 0)
+		return;
+
+	// we must be looking at a SRTP media section
+	if (!sp->protocol->rtp)
+		return;
+	if (!sp->protocol->srtp)
+		return;
+
+	// previous one must be a plain RTP section
+	if (!last->protocol->rtp)
+		return;
+	if (last->protocol->srtp)
+		return;
+
+	// is this a non-rejected SRTP section?
+	if (sp->rtp_endpoint.port) {
+		// looks ok. remove the previous one and only retain this one. mark it as such.
+		g_queue_pop_tail(streams);
+		sp_free(last);
+
+		SP_SET(sp, LEGACY_OSRTP);
+		struct sdp_media *prev_media = prev_media_link->data;
+		prev_media->legacy_osrtp = 1;
+		sp->index--;
+		(*num)--;
+	}
+}
+
 /* XXX split this function up */
 int sdp_streams(const GQueue *sessions, GQueue *streams, struct sdp_ng_flags *flags) {
 	struct sdp_session *session;
@@ -1503,10 +1562,9 @@ int sdp_streams(const GQueue *sessions, GQueue *streams, struct sdp_ng_flags *fl
 	struct stream_params *sp;
 	GList *l, *k;
 	const char *errstr;
-	int num;
+	unsigned int num = 0;
 	struct sdp_attribute *attr;
 
-	num = 0;
 	for (l = sessions->head; l; l = l->next) {
 		session = l->data;
 
@@ -1612,6 +1670,8 @@ int sdp_streams(const GQueue *sessions, GQueue *streams, struct sdp_ng_flags *fl
 				if (sp->fingerprint.hash_func || sp->sdes_params.length)
 					sp->protocol = &transport_protocols[sp->protocol->osrtp_proto];
 			}
+
+			legacy_osrtp_accept(sp, streams, k->prev, flags, &num);
 
 			// a=mid
 			attr = attr_get_by_id(&media->attributes, ATTR_MID);
@@ -2551,6 +2611,13 @@ int sdp_replace(struct sdp_chopper *chop, GQueue *sessions, struct call_monologu
 
 		for (k = session->media_streams.head; k; k = k->next) {
 			sdp_media = k->data;
+
+			// skip over received dummy SDP sections
+			if (sdp_media->legacy_osrtp) {
+				skip_over(chop, &sdp_media->s);
+				continue;
+			}
+
 			err = "no matching media";
 			if (!m)
 				goto error;
@@ -2563,6 +2630,22 @@ int sdp_replace(struct sdp_chopper *chop, GQueue *sessions, struct call_monologu
 			if (!j)
 				goto error;
 			ps = j->data;
+
+			// generate rejected m= line for accepted legacy OSRTP
+			if (MEDIA_ISSET(call_media, LEGACY_OSRTP)
+					&& call_media->protocol
+					&& call_media->protocol->srtp)
+			{
+				chopper_append_c(chop, "m=");
+				chopper_append_str(chop, &call_media->type);
+				const struct transport_protocol *prtp
+					= &transport_protocols[call_media->protocol->rtp_proto];
+				chopper_append_c(chop, " 0 ");
+				chopper_append_c(chop, prtp->name);
+				chopper_append_c(chop, " ");
+				chopper_append_str(chop, &call_media->format_str);
+				chopper_append_c(chop, "\r\n");
+			}
 
 			if (flags->ice_option != ICE_FORCE_RELAY && call_media->type_id != MT_MESSAGE) {
 				err = "failed to replace media type";

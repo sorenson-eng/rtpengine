@@ -307,7 +307,7 @@ static void streams_parse(const char *s, GQueue *q) {
 static void rtp_pt_free(void *p) {
 	g_slice_free1(sizeof(struct rtp_payload_type), p);
 }
-static void sp_free(void *p) {
+void sp_free(void *p) {
 	struct stream_params *s = p;
 
 	g_queue_clear_full(&s->rtp_payload_types, rtp_pt_free);
@@ -575,8 +575,16 @@ INLINE void ng_sdes_option(struct sdp_ng_flags *out, str *s, void *dummy) {
 
 INLINE void ng_osrtp_option(struct sdp_ng_flags *out, str *s, void *dummy) {
 	switch (__csh_lookup(s)) {
+		case CSH_LOOKUP("accept-rfc"):
+		case CSH_LOOKUP("accept-RFC"):
+			out->osrtp_accept_rfc = 1;
+			break;
+		case CSH_LOOKUP("accept-legacy"):
+			out->osrtp_accept_legacy = 1;
+			break;
 		case CSH_LOOKUP("accept"):
-			out->osrtp_accept = 1;
+			out->osrtp_accept_rfc = 1;
+			out->osrtp_accept_legacy = 1;
 			break;
 		case CSH_LOOKUP("offer"):
 			out->osrtp_offer = 1;

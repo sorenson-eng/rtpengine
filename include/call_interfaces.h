@@ -98,7 +98,8 @@ struct sdp_ng_flags {
 	             media_handover:1,
 	             dtls_passive:1,
 	             dtls_reverse_passive:1,
-	             osrtp_accept:1,
+	             osrtp_accept_legacy:1,
+	             osrtp_accept_rfc:1,
 	             osrtp_offer:1,
 	             reset:1,
 	             all:1,
@@ -180,5 +181,6 @@ int call_interfaces_init(void);
 void call_interfaces_free(void);
 void call_interfaces_timer(void);
 
+void sp_free(void *p);
 
 #endif

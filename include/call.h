@@ -99,6 +99,7 @@ enum call_stream_state {
 #define SHARED_FLAG_ICE_LITE_PEER		0x00000800
 #define SHARED_FLAG_UNIDIRECTIONAL		0x00001000
 #define SHARED_FLAG_RTCP_FB			0x00002000
+#define SHARED_FLAG_LEGACY_OSRTP		0x00004000
 
 /* struct stream_params */
 #define SP_FLAG_NO_RTCP				0x00010000
@@ -116,6 +117,7 @@ enum call_stream_state {
 #define SP_FLAG_TRICKLE_ICE			SHARED_FLAG_TRICKLE_ICE
 #define SP_FLAG_ICE_LITE_PEER			SHARED_FLAG_ICE_LITE_PEER
 #define SP_FLAG_RTCP_FB				SHARED_FLAG_RTCP_FB
+#define SP_FLAG_LEGACY_OSRTP			SHARED_FLAG_LEGACY_OSRTP
 
 /* struct packet_stream */
 #define PS_FLAG_RTP				0x00010000
@@ -161,6 +163,7 @@ enum call_stream_state {
 #define MEDIA_FLAG_RTCP_GEN			0x08000000
 #define MEDIA_FLAG_ECHO				0x10000000
 #define MEDIA_FLAG_BLACKHOLE			0x20000000
+#define MEDIA_FLAG_LEGACY_OSRTP			SHARED_FLAG_LEGACY_OSRTP
 
 /* access macros */
 #define SP_ISSET(p, f)		bf_isset(&(p)->sp_flags, SP_FLAG_ ## f)
