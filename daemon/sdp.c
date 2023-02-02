@@ -1508,12 +1508,12 @@ static void __sdp_t38(struct stream_params *sp, struct sdp_media *media) {
 // associating offer/answer media sections directly with each other, instead of requiring
 // the indexing to be in order and instead of requiring all sections between monologue and sdp_media
 // lists to be matching.
-static void legacy_osrtp_accept(struct stream_params *sp, GQueue *streams, GList *prev_media_link,
+static void legacy_osrtp_accept(struct stream_params *sp, GQueue *streams, GList *media_link,
 		struct sdp_ng_flags *flags, unsigned int *num)
 {
 	if (!streams->tail)
 		return;
-	if (!prev_media_link)
+	if (!media_link || !media_link->prev)
 		return;
 	struct stream_params *last = streams->tail->data;
 
@@ -1548,7 +1548,7 @@ static void legacy_osrtp_accept(struct stream_params *sp, GQueue *streams, GList
 		sp_free(last);
 
 		SP_SET(sp, LEGACY_OSRTP);
-		struct sdp_media *prev_media = prev_media_link->data;
+		struct sdp_media *prev_media = media_link->prev->data;
 		prev_media->legacy_osrtp = 1;
 		sp->index--;
 		(*num)--;
@@ -1671,7 +1671,7 @@ int sdp_streams(const GQueue *sessions, GQueue *streams, struct sdp_ng_flags *fl
 					sp->protocol = &transport_protocols[sp->protocol->osrtp_proto];
 			}
 
-			legacy_osrtp_accept(sp, streams, k->prev, flags, &num);
+			legacy_osrtp_accept(sp, streams, k, flags, &num);
 
 			// a=mid
 			attr = attr_get_by_id(&media->attributes, ATTR_MID);
@@ -2500,6 +2500,137 @@ dup:
 }
 
 
+static const char *replace_sdp_media_section(struct sdp_chopper *chop, struct call_media *call_media,
+		struct sdp_media *sdp_media, GList *j, struct sdp_ng_flags *flags)
+{
+	const char *err;
+	struct packet_stream *ps = j->data;
+
+	if (flags->ice_option != ICE_FORCE_RELAY && call_media->type_id != MT_MESSAGE) {
+		err = "failed to replace media type";
+		if (replace_media_type(chop, sdp_media, call_media))
+			goto error;
+		err = "failed to replace media port";
+		if (replace_media_port(chop, sdp_media, ps))
+			goto error;
+		err = "failed to replace media port count";
+		if (replace_consecutive_port_count(chop, sdp_media, ps, j))
+			goto error;
+		err = "failed to replace media protocol";
+		if (replace_transport_protocol(chop, sdp_media, call_media))
+			goto error;
+		err = "failed to replace media formats";
+		if (replace_codec_list(chop, sdp_media, call_media))
+			goto error;
+
+		if (sdp_media->connection.parsed) {
+			err = "failed to replace media network address";
+			if (replace_network_address(chop, &sdp_media->connection.address, ps,
+						flags, 1))
+				goto error;
+		}
+	}
+	else if (call_media->type_id == MT_MESSAGE) {
+		err = "failed to generate connection line";
+		if (!sdp_media->connection.parsed)
+			if (synth_session_connection(chop, sdp_media))
+				goto error;
+		// leave everything untouched
+		goto next;
+	}
+
+	err = "failed to process media attributes";
+	if (process_media_attributes(chop, sdp_media, flags, call_media))
+		goto error;
+
+	copy_up_to_end_of(chop, &sdp_media->s);
+
+	if (call_media->media_id.s) {
+		chopper_append_c(chop, "a=mid:");
+		chopper_append_str(chop, &call_media->media_id);
+		chopper_append_c(chop, "\r\n");
+	}
+
+	if (!sdp_media->port_num || !ps->selected_sfd)
+		goto next;
+
+	if (proto_is_rtp(call_media->protocol))
+		insert_codec_parameters(chop, call_media);
+
+	insert_sdp_attributes(chop, call_media);
+
+	struct packet_stream *ps_rtcp = NULL;
+	if (ps->rtcp_sibling) {
+		ps_rtcp = ps->rtcp_sibling;
+		j = j->next;
+		err = "no RTCP sibling";
+		if (!j)
+			goto error;
+		assert(j->data == ps_rtcp);
+	}
+
+	if (!flags->original_sendrecv) {
+		if (MEDIA_ARESET2(call_media, SEND, RECV))
+			chopper_append_c(chop, "a=sendrecv\r\n");
+		else if (MEDIA_ISSET(call_media, SEND))
+			chopper_append_c(chop, "a=sendonly\r\n");
+		else if (MEDIA_ISSET(call_media, RECV))
+			chopper_append_c(chop, "a=recvonly\r\n");
+		else
+			chopper_append_c(chop, "a=inactive\r\n");
+	}
+
+	if (proto_is_rtp(call_media->protocol)) {
+		if (MEDIA_ISSET(call_media, RTCP_MUX)
+				&& (flags->opmode == OP_ANSWER
+					|| (flags->opmode == OP_OFFER
+						&& flags->rtcp_mux_require)))
+		{
+			insert_rtcp_attr(chop, ps, flags);
+			chopper_append_c(chop, "a=rtcp-mux\r\n");
+			ps_rtcp = NULL;
+		}
+		else if (ps_rtcp && flags->ice_option != ICE_FORCE_RELAY) {
+			insert_rtcp_attr(chop, ps_rtcp, flags);
+			if (MEDIA_ISSET(call_media, RTCP_MUX))
+				chopper_append_c(chop, "a=rtcp-mux\r\n");
+		}
+	}
+	else
+		ps_rtcp = NULL;
+
+	insert_crypto(call_media, chop, flags);
+	insert_dtls(call_media, chop);
+
+	if (proto_is_rtp(call_media->protocol) && call_media->ptime)
+		chopper_append_printf(chop, "a=ptime:%i\r\n", call_media->ptime);
+
+	if (MEDIA_ISSET(call_media, ICE) && call_media->ice_agent) {
+		chopper_append_c(chop, "a=ice-ufrag:");
+		chopper_append_str(chop, &call_media->ice_agent->ufrag[1]);
+		chopper_append_c(chop, "\r\na=ice-pwd:");
+		chopper_append_str(chop, &call_media->ice_agent->pwd[1]);
+		chopper_append_c(chop, "\r\n");
+	}
+
+	if (MEDIA_ISSET(call_media, TRICKLE_ICE) && call_media->ice_agent)
+		chopper_append_c(chop, "a=ice-options:trickle\r\n");
+	if (MEDIA_ISSET(call_media, ICE))
+		insert_candidates(chop, ps, ps_rtcp, flags, sdp_media);
+
+next:
+	if (MEDIA_ISSET(call_media, TRICKLE_ICE) && call_media->ice_agent)
+		chopper_append_c(chop, "a=end-of-candidates\r\n");
+	else if (attr_get_by_id(&sdp_media->attributes, ATTR_END_OF_CANDIDATES))
+		chopper_append_c(chop, "a=end-of-candidates\r\n");
+
+	return NULL;
+
+error:
+	return err;
+}
+
+
 /* called with call->master_lock held in W */
 int sdp_replace(struct sdp_chopper *chop, GQueue *sessions, struct call_monologue *monologue,
 		struct sdp_ng_flags *flags)
@@ -2509,7 +2640,7 @@ int sdp_replace(struct sdp_chopper *chop, GQueue *sessions, struct call_monologu
 	GList *l, *k, *m, *j;
 	int media_index, sess_conn;
 	struct call_media *call_media;
-	struct packet_stream *ps, *ps_rtcp;
+	struct packet_stream *ps;
 	const char *err = NULL;
 
 	m = monologue->medias.head;
@@ -2629,7 +2760,6 @@ int sdp_replace(struct sdp_chopper *chop, GQueue *sessions, struct call_monologu
 			j = call_media->streams.head;
 			if (!j)
 				goto error;
-			ps = j->data;
 
 			// generate rejected m= line for accepted legacy OSRTP
 			if (MEDIA_ISSET(call_media, LEGACY_OSRTP)
@@ -2647,123 +2777,9 @@ int sdp_replace(struct sdp_chopper *chop, GQueue *sessions, struct call_monologu
 				chopper_append_c(chop, "\r\n");
 			}
 
-			if (flags->ice_option != ICE_FORCE_RELAY && call_media->type_id != MT_MESSAGE) {
-				err = "failed to replace media type";
-				if (replace_media_type(chop, sdp_media, call_media))
-					goto error;
-				err = "failed to replace media port";
-			        if (replace_media_port(chop, sdp_media, ps))
-				        goto error;
-				err = "failed to replace media port count";
-			        if (replace_consecutive_port_count(chop, sdp_media, ps, j))
-				        goto error;
-				err = "failed to replace media protocol";
-				if (replace_transport_protocol(chop, sdp_media, call_media))
-				        goto error;
-				err = "failed to replace media formats";
-				if (replace_codec_list(chop, sdp_media, call_media))
-					goto error;
-
-				if (sdp_media->connection.parsed) {
-					err = "failed to replace media network address";
-				        if (replace_network_address(chop, &sdp_media->connection.address, ps,
-								flags, 1))
-					        goto error;
-				}
-			}
-			else if (call_media->type_id == MT_MESSAGE) {
-				err = "failed to generate connection line";
-				if (!sdp_media->connection.parsed)
-					if (synth_session_connection(chop, sdp_media))
-						goto error;
-				// leave everything untouched
-				goto next;
-			}
-
-			err = "failed to process media attributes";
-			if (process_media_attributes(chop, sdp_media, flags, call_media))
+			err = replace_sdp_media_section(chop, call_media, sdp_media, j, flags);
+			if (err)
 				goto error;
-
-			copy_up_to_end_of(chop, &sdp_media->s);
-
-			if (call_media->media_id.s) {
-				chopper_append_c(chop, "a=mid:");
-				chopper_append_str(chop, &call_media->media_id);
-				chopper_append_c(chop, "\r\n");
-			}
-
-			if (!sdp_media->port_num || !ps->selected_sfd)
-				goto next;
-
-			if (proto_is_rtp(call_media->protocol))
-				insert_codec_parameters(chop, call_media);
-
-			insert_sdp_attributes(chop, call_media);
-
-			ps_rtcp = NULL;
-			if (ps->rtcp_sibling) {
-				ps_rtcp = ps->rtcp_sibling;
-				j = j->next;
-				err = "no RTCP sibling";
-				if (!j)
-					goto error;
-				assert(j->data == ps_rtcp);
-			}
-
-			if (!flags->original_sendrecv) {
-				if (MEDIA_ARESET2(call_media, SEND, RECV))
-					chopper_append_c(chop, "a=sendrecv\r\n");
-				else if (MEDIA_ISSET(call_media, SEND))
-					chopper_append_c(chop, "a=sendonly\r\n");
-				else if (MEDIA_ISSET(call_media, RECV))
-					chopper_append_c(chop, "a=recvonly\r\n");
-				else
-					chopper_append_c(chop, "a=inactive\r\n");
-			}
-
-			if (proto_is_rtp(call_media->protocol)) {
-				if (MEDIA_ISSET(call_media, RTCP_MUX)
-						&& (flags->opmode == OP_ANSWER
-							|| (flags->opmode == OP_OFFER
-								&& flags->rtcp_mux_require)))
-				{
-					insert_rtcp_attr(chop, ps, flags);
-					chopper_append_c(chop, "a=rtcp-mux\r\n");
-					ps_rtcp = NULL;
-				}
-				else if (ps_rtcp && flags->ice_option != ICE_FORCE_RELAY) {
-					insert_rtcp_attr(chop, ps_rtcp, flags);
-					if (MEDIA_ISSET(call_media, RTCP_MUX))
-						chopper_append_c(chop, "a=rtcp-mux\r\n");
-				}
-			}
-			else
-				ps_rtcp = NULL;
-
-			insert_crypto(call_media, chop, flags);
-			insert_dtls(call_media, chop);
-
-			if (proto_is_rtp(call_media->protocol) && call_media->ptime)
-				chopper_append_printf(chop, "a=ptime:%i\r\n", call_media->ptime);
-
-			if (MEDIA_ISSET(call_media, ICE) && call_media->ice_agent) {
-				chopper_append_c(chop, "a=ice-ufrag:");
-				chopper_append_str(chop, &call_media->ice_agent->ufrag[1]);
-				chopper_append_c(chop, "\r\na=ice-pwd:");
-				chopper_append_str(chop, &call_media->ice_agent->pwd[1]);
-				chopper_append_c(chop, "\r\n");
-			}
-
-			if (MEDIA_ISSET(call_media, TRICKLE_ICE) && call_media->ice_agent)
-				chopper_append_c(chop, "a=ice-options:trickle\r\n");
-			if (MEDIA_ISSET(call_media, ICE))
-				insert_candidates(chop, ps, ps_rtcp, flags, sdp_media);
-
-next:
-			if (MEDIA_ISSET(call_media, TRICKLE_ICE) && call_media->ice_agent)
-				chopper_append_c(chop, "a=end-of-candidates\r\n");
-			else if (attr_get_by_id(&sdp_media->attributes, ATTR_END_OF_CANDIDATES))
-				chopper_append_c(chop, "a=end-of-candidates\r\n");
 
 			media_index++;
 			m = m->next;
