@@ -5,6 +5,7 @@
 #include <netinet/ip.h>
 #include <arpa/inet.h>
 #include <math.h>
+#include <stdbool.h>
 
 #include "compat.h"
 #include "call.h"
@@ -1508,38 +1509,39 @@ static void __sdp_t38(struct stream_params *sp, struct sdp_media *media) {
 // associating offer/answer media sections directly with each other, instead of requiring
 // the indexing to be in order and instead of requiring all sections between monologue and sdp_media
 // lists to be matching.
-static void legacy_osrtp_accept(struct stream_params *sp, GQueue *streams, GList *media_link,
+// returns: discard this `sp` yes/no
+static bool legacy_osrtp_accept(struct stream_params *sp, GQueue *streams, GList *media_link,
 		struct sdp_ng_flags *flags, unsigned int *num)
 {
 	if (!streams->tail)
-		return;
+		return false;
 	if (!media_link || !media_link->prev)
-		return;
+		return false;
 	struct stream_params *last = streams->tail->data;
 
 	if (!flags->osrtp_accept_legacy)
-		return;
+		return false;
 
 	// protocols must be known
 	if (!sp->protocol)
-		return;
+		return false;
 	if (!last->protocol)
-		return;
+		return false;
 	// types must match
 	if (str_cmp_str(&sp->type, &last->type) != 0)
-		return;
+		return false;
 
 	// we must be looking at a SRTP media section
 	if (!sp->protocol->rtp)
-		return;
+		return false;
 	if (!sp->protocol->srtp)
-		return;
+		return false;
 
 	// previous one must be a plain RTP section
 	if (!last->protocol->rtp)
-		return;
+		return false;
 	if (last->protocol->srtp)
-		return;
+		return false;
 
 	// is this a non-rejected SRTP section?
 	if (sp->rtp_endpoint.port) {
@@ -1552,7 +1554,19 @@ static void legacy_osrtp_accept(struct stream_params *sp, GQueue *streams, GList
 		prev_media->legacy_osrtp = 1;
 		sp->index--;
 		(*num)--;
+		return false;
 	}
+
+	// or is it a rejected SRTP with a non-rejected RTP counterpart?
+	if (!sp->rtp_endpoint.port && last->rtp_endpoint.port) {
+		// just throw the rejected SRTP section away
+		struct sdp_media *media = media_link->data;
+		media->legacy_osrtp = 1;
+		sp_free(sp);
+		return true;
+	}
+
+	return false;
 }
 
 /* XXX split this function up */
@@ -1671,7 +1685,8 @@ int sdp_streams(const GQueue *sessions, GQueue *streams, struct sdp_ng_flags *fl
 					sp->protocol = &transport_protocols[sp->protocol->osrtp_proto];
 			}
 
-			legacy_osrtp_accept(sp, streams, k, flags, &num);
+			if (legacy_osrtp_accept(sp, streams, k, flags, &num))
+				continue;
 
 			// a=mid
 			attr = attr_get_by_id(&media->attributes, ATTR_MID);
@@ -2348,6 +2363,8 @@ static void insert_dtls(struct call_media *media, struct sdp_chopper *chop) {
 	const char *actpass;
 	struct call *call = media->call;
 
+	if (!media->protocol || !media->protocol->srtp)
+		return;
 	if (!call->dtls_cert || !MEDIA_ISSET(media, DTLS) || MEDIA_ISSET(media, PASSTHRU))
 		return;
 
@@ -2441,6 +2458,8 @@ static void insert_crypto1(struct call_media *media, struct sdp_chopper *chop, s
 	chopper_append_c(chop, "\r\n");
 }
 static void insert_crypto(struct call_media *media, struct sdp_chopper *chop, struct sdp_ng_flags *flags) {
+	if (!media->protocol || !media->protocol->srtp)
+		return;
 	for (GList *l = media->sdes_out.head; l; l = l->next)
 		insert_crypto1(media, chop, l->data, flags);
 }
@@ -2761,20 +2780,33 @@ int sdp_replace(struct sdp_chopper *chop, GQueue *sessions, struct call_monologu
 			if (!j)
 				goto error;
 
-			// generate rejected m= line for accepted legacy OSRTP
-			if (MEDIA_ISSET(call_media, LEGACY_OSRTP)
-					&& call_media->protocol
-					&& call_media->protocol->srtp)
-			{
-				chopper_append_c(chop, "m=");
-				chopper_append_str(chop, &call_media->type);
+			if (call_media->protocol && call_media->protocol->srtp) {
 				const struct transport_protocol *prtp
 					= &transport_protocols[call_media->protocol->rtp_proto];
-				chopper_append_c(chop, " 0 ");
-				chopper_append_c(chop, prtp->name);
-				chopper_append_c(chop, " ");
-				chopper_append_str(chop, &call_media->format_str);
-				chopper_append_c(chop, "\r\n");
+				if (MEDIA_ISSET(call_media, LEGACY_OSRTP)) {
+					// generate rejected m= line for accepted legacy OSRTP
+					chopper_append_c(chop, "m=");
+					chopper_append_str(chop, &call_media->type);
+					chopper_append_c(chop, " 0 ");
+					chopper_append_c(chop, prtp->name);
+					chopper_append_c(chop, " ");
+					chopper_append_str(chop, &call_media->format_str);
+					chopper_append_c(chop, "\r\n");
+				}
+				else if (flags->osrtp_offer_legacy && flags->opmode == OP_OFFER) {
+					// generate duplicate plain RTP media section for OSRTP offer:
+					// save current chopper state, save actual protocol,
+					// print SDP section, restore chopper and protocl
+					struct sdp_chopper chop_copy = *chop;
+					const struct transport_protocol *proto = call_media->protocol;
+					call_media->protocol = prtp;
+					err = replace_sdp_media_section(chop, call_media, sdp_media,
+							j, flags);
+					*chop = chop_copy;
+					call_media->protocol = proto;
+					if (err)
+						goto error;
+				}
 			}
 
 			err = replace_sdp_media_section(chop, call_media, sdp_media, j, flags);
