@@ -4993,6 +4993,9 @@ static inline int is_rtcp_fb_packet(struct sk_buff *skb) {
 		len++;
 		len <<= 2;
 		if (len > left) // invalid
+			/* Sorenson Change, include log */
+			log_err("RTCP length is invalid, dropping");
+			/* end change */
 			return 0;
 
 		left -= len;
