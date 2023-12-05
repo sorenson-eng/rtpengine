@@ -4983,9 +4983,11 @@ static inline int is_rtcp_fb_packet(struct sk_buff *skb) {
 		if (left < 8) // minimum RTCP size
 			return 0;
 		m_pt = skb->data[offset + 1];
+		/* Sorenson Change, allow RTPFB and PSFB*/
 		// only RTPFB and PSFB
-		if (m_pt != 205 && m_pt != 206)
-			return 0;
+		//if (m_pt != 205 && m_pt != 206)
+			//return 0;
+		/* end change */
 
 		// length check
 		len = (((unsigned char) skb->data[offset + 2]) << 8)
