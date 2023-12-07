@@ -4983,11 +4983,9 @@ static inline int is_rtcp_fb_packet(struct sk_buff *skb) {
 		if (left < 8) // minimum RTCP size
 			return 0;
 		m_pt = skb->data[offset + 1];
-		/* Sorenson Change, allow more than RTPFB and PSFB*/
 		// only RTPFB and PSFB
-		//if (m_pt != 205 && m_pt != 206)
-			//return 0;
-		/* end change */
+		if (m_pt != 205 && m_pt != 206)
+			return 0;
 
 		// length check
 		len = (((unsigned char) skb->data[offset + 2]) << 8)
@@ -5401,7 +5399,9 @@ static unsigned int rtpengine46(struct sk_buff *skb, struct sk_buff *oskb,
 		}
 		else {
 			if (g->target.rtcp_fb_fw && is_rtcp_fb_packet(skb))
-				; // forward and then drop
+				/* Sorenson Change, mark RTCP FB packets for forwarding */
+				is_rtcp = RTCP_FORWARD; // forward, mark, and pass to userspace
+				/* end change */
 			else if (g->target.rtcp_fw)
 				is_rtcp = RTCP_FORWARD; // forward, mark, and pass to userspace
 			else
