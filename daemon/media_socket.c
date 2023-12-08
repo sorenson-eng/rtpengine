@@ -1492,8 +1492,9 @@ static const char *kernelize_one(struct rtpengine_target_info *reti, GQueue *out
 		reti->rtp = 1;
 		if (!ML_ISSET(media->monologue, TRANSCODING)) {
 			reti->rtcp_fw = 1;
-			if (media->protocol->avpf)
-				reti->rtcp_fb_fw = 1;
+			/* Sorenson Change, always allow media to Forward */
+			reti->rtcp_fb_fw = 1;
+			/* end change */
 		}
 	}
 
