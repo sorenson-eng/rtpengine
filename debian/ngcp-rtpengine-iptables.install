@@ -1,1 +1,1 @@
-${env:XTABLES_DIR}/libxt_RTPENGINE.so ${env:XTABLES_DIR}
+./debian/tmp/usr/lib/x86_64-linux-gnu/xtables/libxt_RTPENGINE.so /usr/lib/x86_64-linux-gnu/xtables/
