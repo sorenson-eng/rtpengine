@@ -40,4 +40,4 @@ execute_after_dh_installsystemd:
 	dh_installsystemd -pngcp-rtpengine-recording-daemon --name=ngcp-rtpengine-recording-nfs-mount
 
 override_dh_dkms:
-	dh_dkms -p$(DEB_SOURCE)-kernel-dkms -V $(DEB_VERSION_UPSTREAM)
+	dh_dkms -pngcp-rtpengine-kernel-dkms -V 11.5.1.22+0~mr11.5.1.22
