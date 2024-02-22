@@ -1,3 +1,5 @@
 debian/ngcp-rtpengine-recording-nfs-setup /usr/sbin/
 etc/rtpengine-recording.conf /etc/rtpengine/
 usr/bin/rtpengine-recording
+debian/ngcp-rtpengine-recording-nfs-setup.service /lib/systemd/system/
+debian/ngcp-rtpengine-recording-nfs-mount.service /lib/systemd/system/

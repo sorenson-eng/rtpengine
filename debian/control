@@ -5,9 +5,9 @@ Maintainer: Sipwise Development Team <support@sipwise.com>
 Homepage: https://www.sipwise.com/
 Standards-Version: 4.5.1
 Build-Depends:
- debhelper-compat (= 13),
+ debhelper (>= 12),
  default-libmysqlclient-dev,
- dh-sequence-dkms,
+ dkms,
  gperf,
  libavcodec-dev (>= 6:10),
  libavfilter-dev (>= 6:10),
@@ -46,7 +46,7 @@ Build-Depends:
  libxtables-dev (>= 1.4) | iptables-dev (>= 1.4),
  markdown,
  pandoc,
- pkgconf,
+ pkg-config,
  python3,
  python3-websockets,
  systemd-dev | systemd,
