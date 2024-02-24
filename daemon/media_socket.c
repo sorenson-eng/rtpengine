@@ -38,11 +38,11 @@
 #endif
 
 #ifndef MAX_RECV_ITERS
-#define MAX_RECV_ITERS 50
+#define MAX_RECV_ITERS 100 /* Sorenson change */
 #endif
 
 #ifndef MAX_RECV_LOOP_STRIKES
-#define MAX_RECV_LOOP_STRIKES 5
+#define MAX_RECV_LOOP_STRIKES 10 /* Sorenson change */
 #endif
 
 #define DS_io(x, ps, ke, io) do {						\
@@ -3145,9 +3145,13 @@ restart:
 
 	for (iters = 0; ; iters++) {
 #if MAX_RECV_ITERS
+		// Sorenson: Log packets used
+		if ((iters >= (MAX_RECV_ITERS/4)) && (iters < MAX_RECV_ITERS)) {
+			ilog(LOG_WARNING | LOG_FLAG_LIMIT, "Too many packets in UDP receive queue (more than %d), continue loop", iters);
+		} else // End of Sorenson: Log packets used
 		if (iters >= MAX_RECV_ITERS) {
-			ilog(LOG_ERROR | LOG_FLAG_LIMIT, "Too many packets in UDP receive queue (more than %d), "
-					"aborting loop. Dropped packets possible", iters);
+			ilog(LOG_ERROR | LOG_FLAG_LIMIT, "Strike %d: Too many packets in UDP receive queue (more than %d), "
+			                "aborting loop. Dropped packets possible", strikes, iters);
 			g_atomic_int_inc(&sfd->error_strikes);
 			g_atomic_int_set(&sfd->active_read_events,0);
 			goto strike;
