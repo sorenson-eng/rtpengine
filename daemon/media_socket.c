@@ -38,11 +38,11 @@
 #endif
 
 #ifndef MAX_RECV_ITERS
-#define MAX_RECV_ITERS 100 /* Sorenson change */
+#define MAX_RECV_ITERS 0 /* Sorenson change */
 #endif
 
 #ifndef MAX_RECV_LOOP_STRIKES
-#define MAX_RECV_LOOP_STRIKES 10 /* Sorenson change */
+#define MAX_RECV_LOOP_STRIKES 0 /* Sorenson change */
 #endif
 
 #define DS_io(x, ps, ke, io) do {						\
@@ -3133,6 +3133,7 @@ static void stream_fd_readable(int fd, void *p, uintptr_t u) {
 	log_info_stream_fd(sfd);
 	int strikes = g_atomic_int_get(&sfd->error_strikes);
 
+#if MAX_RECV_LOOP_STRIKES
 	if (strikes >= MAX_RECV_LOOP_STRIKES) {
 		ilog(LOG_ERROR | LOG_FLAG_LIMIT, "UDP receive queue exceeded %i times: "
 				"discarding packet", strikes);
@@ -3140,13 +3141,14 @@ static void stream_fd_readable(int fd, void *p, uintptr_t u) {
 		// We could remove ourselves from the poller though. Maybe call stream_fd_closed?
 		return;
 	}
+#endif /* MAX_RECV_LOOP_STRIKES */
 
 restart:
 
 	for (iters = 0; ; iters++) {
 #if MAX_RECV_ITERS
 		// Sorenson: Log packets used
-		if ((iters >= (MAX_RECV_ITERS/4)) && (iters < MAX_RECV_ITERS)) {
+		if ((iters >= ((MAX_RECV_ITERS * 3) / 4)) && (iters < MAX_RECV_ITERS)) {
 			ilog(LOG_WARNING | LOG_FLAG_LIMIT, "Too many packets in UDP receive queue (more than %d), continue loop", iters);
 		} else // End of Sorenson: Log packets used
 		if (iters >= MAX_RECV_ITERS) {
@@ -3156,7 +3158,7 @@ restart:
 			g_atomic_int_set(&sfd->active_read_events,0);
 			goto strike;
 		}
-#endif
+#endif /* MAX_RECV_ITERS */
 
 		struct packet_handler_ctx phc;
 		ZERO(phc);
