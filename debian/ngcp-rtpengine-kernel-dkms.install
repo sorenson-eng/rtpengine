@@ -1,3 +1,4 @@
 kernel-module/*.c	usr/src/ngcp-rtpengine-11.5.1.22+0~mr11.5.1.22
 kernel-module/*.h	usr/src/ngcp-rtpengine-11.5.1.22+0~mr11.5.1.22
 kernel-module/Makefile	usr/src/ngcp-rtpengine-11.5.1.22+0~mr11.5.1.22
+debian/dkms.conf        usr/src/ngcp-rtpengine-11.5.1.22+0~mr11.5.1.22
