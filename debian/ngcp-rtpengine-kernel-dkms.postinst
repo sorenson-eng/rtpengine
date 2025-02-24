@@ -14,6 +14,9 @@ if [ "$VIRT" = "yes" ]; then
 	echo "Container environment detected. Skip dkms"
 else
 	if [ "$1" = 'configure' ] ; then
+		dkms add -m ngcp-rtpengine -v 11.5.1.22+0~mr11.5.1.22
+		dkms build -m ngcp-rtpengine -v 11.5.1.22+0~mr11.5.1.22
+		dkms install -m ngcp-rtpengine -v 11.5.1.22+0~mr11.5.1.22
 		# try to start the daemon
 		if [ -x /etc/init.d/ngcp-rtpengine-daemon ] ; then
 			invoke-rc.d ngcp-rtpengine-daemon restart || true
